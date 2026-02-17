@@ -1,16 +1,15 @@
 import type { ReactNode } from "react";
+import "./globals.css";
 
 export const metadata = {
-  title: "AI PM Roadmap",
-  description: "Capacity-aware roadmap builder prototype"
+  title: "Capacity-aware Roadmap Builder",
+  description: "Prototype for capacity-aware roadmap planning"
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body style={{ margin: 0, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial" }}>
-        {children}
-      </body>
+      <body>{children}</body>
     </html>
   );
 }
