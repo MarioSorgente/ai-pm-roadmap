@@ -99,25 +99,25 @@ export const SAMPLE_PLAN: Omit<PlanInput, "settings"> = {
     { id: "team-backend", name: "Backend", engineerIds: ["eng-dan", "eng-eve"] }
   ],
   engineers: [
-    { id: "eng-alice", name: "Alice Chen", initials: "A", teamId: "team-frontend", sprintCapacity: [8, 8, 8, 8, 8, 8, 7, 8, 8, 8] },
-    { id: "eng-bob", name: "Bob Kumar", initials: "B", teamId: "team-frontend", sprintCapacity: [6, 6, 6, 6, 6, 5, 6, 6, 6, 6] },
-    { id: "eng-cara", name: "Cara Jones", initials: "C", teamId: "team-frontend", sprintCapacity: [5, 5, 5, 4, 5, 5, 5, 5, 5, 5] },
-    { id: "eng-dan", name: "Dan Park", initials: "D", teamId: "team-backend", sprintCapacity: [10, 10, 9, 10, 10, 10, 10, 10, 10, 10] },
-    { id: "eng-eve", name: "Eve Santos", initials: "E", teamId: "team-backend", sprintCapacity: [8, 8, 8, 8, 8, 7, 8, 8, 8, 8] }
+    { id: "eng-alice", name: "Alice Chen", initials: "A", teamId: "team-frontend", sprintCapacity: [80, 80, 80, 75, 80, 80, 75, 80, 80, 80] },
+    { id: "eng-bob", name: "Bob Kumar", initials: "B", teamId: "team-frontend", sprintCapacity: [75, 75, 75, 75, 70, 75, 75, 75, 75, 75] },
+    { id: "eng-cara", name: "Cara Jones", initials: "C", teamId: "team-frontend", sprintCapacity: [70, 70, 70, 70, 70, 70, 65, 70, 70, 70] },
+    { id: "eng-dan", name: "Dan Park", initials: "D", teamId: "team-backend", sprintCapacity: [85, 85, 85, 85, 80, 85, 85, 85, 85, 85] },
+    { id: "eng-eve", name: "Eve Santos", initials: "E", teamId: "team-backend", sprintCapacity: [80, 80, 80, 75, 80, 80, 80, 80, 80, 80] }
   ],
   externalLoads: [
-    { id: "load-support-frontend", teamId: "team-frontend", name: "Support", sprintLoad: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2] },
-    { id: "load-urgent-backend", teamId: "team-backend", name: "Urgent requests", sprintLoad: [1, 1, 2, 1, 1, 1, 2, 1, 1, 1] }
+    { id: "load-support-frontend", teamId: "team-frontend", name: "Support", sprintLoad: [30, 30, 30, 30, 30, 25, 30, 30, 30, 30] },
+    { id: "load-urgent-backend", teamId: "team-backend", name: "Urgent requests", sprintLoad: [20, 20, 25, 20, 20, 20, 25, 20, 20, 20] }
   ],
   initiatives: [
-    { id: "init-auth", name: "User Auth Flow", effort: 13, priority: "P0", dependencyIds: [], teamId: "team-backend" },
-    { id: "init-dashboard", name: "Dashboard UI", effort: 21, priority: "P1", dependencyIds: ["init-auth"], teamId: "team-frontend" },
-    { id: "init-api", name: "API Gateway", effort: 8, priority: "P0", dependencyIds: [], teamId: "team-backend" },
-    { id: "init-search", name: "Search Feature", effort: 13, priority: "P2", dependencyIds: ["init-dashboard"], teamId: "team-frontend" },
+    { id: "init-auth", name: "User Auth Flow", effort: 160, priority: "P0", dependencyIds: [], teamId: "team-backend" },
+    { id: "init-dashboard", name: "Dashboard UI", effort: 220, priority: "P1", dependencyIds: ["init-auth"], teamId: "team-frontend" },
+    { id: "init-api", name: "API Gateway", effort: 90, priority: "P0", dependencyIds: [], teamId: "team-backend" },
+    { id: "init-search", name: "Search Feature", effort: 140, priority: "P2", dependencyIds: ["init-dashboard"], teamId: "team-frontend" },
     {
       id: "init-payment",
       name: "Payment Integration",
-      effort: 18,
+      effort: 180,
       priority: "P1",
       dependencyIds: ["init-auth", "init-api"],
       targetWindow: { startSprint: 3, endSprint: 6 },

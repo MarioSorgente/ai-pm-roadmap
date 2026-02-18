@@ -23,8 +23,9 @@ type DraftState = {
   settings: PlanInput["settings"];
 };
 
-const STORAGE_KEY = "ai-pm-roadmap-v03";
+const STORAGE_KEY = "ai-pm-roadmap-v04";
 const PRIORITIES: Priority[] = ["P0", "P1", "P2", "P3"];
+const INITIATIVES_PER_PAGE = 3;
 
 function uid(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
@@ -40,6 +41,10 @@ function initialsFromName(name: string) {
   if (words.length === 0) return "?";
   if (words.length === 1) return words[0][0]?.toUpperCase() ?? "?";
   return `${words[0][0] ?? ""}${words[1][0] ?? ""}`.toUpperCase();
+}
+
+function clampPercent(value: number) {
+  return Math.max(0, Math.min(100, value));
 }
 
 function Hint({ text }: { text: string }) {
@@ -59,6 +64,7 @@ export default function HomePage() {
   const [output, setOutput] = useState<PlanOutput | null>(null);
   const [message, setMessage] = useState("Define input, then schedule to see capacity vs effort.");
   const [newTeamName, setNewTeamName] = useState("");
+  const [initiativePage, setInitiativePage] = useState(0);
 
   useEffect(() => {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -104,6 +110,16 @@ export default function HomePage() {
   }, [externalLoads, teams]);
 
   const sortedInitiatives = useMemo(() => [...initiatives].sort((a, b) => a.name.localeCompare(b.name)), [initiatives]);
+  const initiativePages = Math.max(1, Math.ceil(sortedInitiatives.length / INITIATIVES_PER_PAGE));
+  const normalizedInitiativePage = Math.min(initiativePage, initiativePages - 1);
+  const pagedInitiatives = sortedInitiatives.slice(
+    normalizedInitiativePage * INITIATIVES_PER_PAGE,
+    normalizedInitiativePage * INITIATIVES_PER_PAGE + INITIATIVES_PER_PAGE
+  );
+
+  useEffect(() => {
+    setInitiativePage((prev) => Math.min(prev, Math.max(0, initiativePages - 1)));
+  }, [initiativePages]);
 
   const totalEffort = initiatives.reduce((sum, initiative) => sum + initiative.effort, 0);
   const totalBaseCapacityPerSprint = teams.reduce((sum, team) => sum + (teamBaseCapacitySummary.get(team.id) ?? 0), 0);
@@ -152,7 +168,7 @@ export default function HomePage() {
     setMessage(`Scheduled ${next.scheduled.length} initiatives across ${settings.totalSprints} sprints.`);
   }
 
-  function resetSample() {
+  function resetToSample() {
     setTeams(SAMPLE_PLAN.teams);
     setEngineers(SAMPLE_PLAN.engineers);
     setExternalLoads(SAMPLE_PLAN.externalLoads);
@@ -170,6 +186,7 @@ export default function HomePage() {
 
   function addEngineer(teamId: string) {
     const id = uid("eng");
+    const capacity = Array.from({ length: settings.totalSprints }, () => 75);
     setEngineers((prev) => [
       ...prev,
       {
@@ -177,7 +194,7 @@ export default function HomePage() {
         name: "New Engineer",
         initials: "NE",
         teamId,
-        sprintCapacity: Array.from({ length: settings.totalSprints }, () => 6)
+        sprintCapacity: capacity
       }
     ]);
     setTeams((prev) => prev.map((team) => (team.id === teamId ? { ...team, engineerIds: [...team.engineerIds, id] } : team)));
@@ -186,22 +203,28 @@ export default function HomePage() {
   function addExternalLoad(teamId: string) {
     setExternalLoads((prev) => [
       ...prev,
-      { id: uid("load"), teamId, name: "Support", sprintLoad: Array.from({ length: settings.totalSprints }, () => 1) }
+      {
+        id: uid("load"),
+        teamId,
+        name: "Meetings",
+        sprintLoad: Array.from({ length: settings.totalSprints }, () => 15)
+      }
     ]);
   }
 
   function addInitiative() {
-    const firstTeam = teams[0]?.id;
-    if (!firstTeam) return;
+    const fallbackTeam = teams[0]?.id;
+    if (!fallbackTeam) return;
+    setInitiativePage(0);
     setInitiatives((prev) => [
       ...prev,
       {
         id: uid("init"),
         name: "New Initiative",
-        effort: 8,
+        effort: 100,
         priority: "P2",
         dependencyIds: [],
-        teamId: firstTeam
+        teamId: fallbackTeam
       }
     ]);
   }
@@ -218,11 +241,12 @@ export default function HomePage() {
       <aside className="sidebar">
         <div className="section-title">
           <h2>Team capacity input</h2>
-          <Hint text="Capacity = sum of engineer points. External load = work that burns sprint points (support, incidents, urgent requests)." />
+          <Hint text="Capacity and effort are treated as sprint percentage points. Available = Capacity - External - Planned effort." />
         </div>
+
         <div className="team-adder">
           <input value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} placeholder="New team..." />
-          <button onClick={addTeam}>+</button>
+          <button onClick={addTeam}>Add</button>
         </div>
 
         {teams.map((team) => {
@@ -230,6 +254,9 @@ export default function HomePage() {
           const loads = externalLoads.filter((load) => load.teamId === team.id);
           const teamBase = teamBaseCapacitySummary.get(team.id) ?? 0;
           const teamLoad = teamLoadSummary.get(team.id) ?? 0;
+          const teamAvailable = Math.max(0, teamBase - teamLoad);
+          const overBy = Math.max(0, teamLoad - teamBase);
+
           return (
             <section key={team.id} className="team-card">
               <div className="team-header">
@@ -240,87 +267,112 @@ export default function HomePage() {
                     setTeams((prev) => prev.map((row) => (row.id === team.id ? { ...row, name: e.target.value } : row)))
                   }
                 />
-                <span>{teamBase - teamLoad}pts</span>
-                <button onClick={() => removeTeam(team.id)}>×</button>
+                <button className="icon-btn" onClick={() => removeTeam(team.id)}>
+                  ×
+                </button>
               </div>
 
-              <div className="formula-row">Base {teamBase} − External {teamLoad} = Available {Math.max(0, teamBase - teamLoad)} (S1)</div>
-
               {teamEngineers.map((engineer) => (
-                <div key={engineer.id} className="engineer-row">
-                  <span className="initials">{engineer.initials}</span>
-                  <input
-                    value={engineer.name}
-                    onChange={(e) =>
-                      setEngineers((prev) =>
-                        prev.map((item) =>
-                          item.id === engineer.id ? { ...item, name: e.target.value, initials: initialsFromName(e.target.value) } : item
-                        )
-                      )
-                    }
-                  />
-                  <div className="capacity-inline" title="Each box is capacity points for sprint S1, S2, S3...">
-                    {Array.from({ length: settings.totalSprints }, (_, index) => (
-                      <input
-                        key={`${engineer.id}-cap-${index}`}
-                        type="number"
-                        min={0}
-                        value={engineer.sprintCapacity[index] ?? 0}
-                        onChange={(e) =>
-                          setEngineers((prev) =>
-                            prev.map((item) => {
-                              if (item.id !== engineer.id) return item;
-                              const sprintCapacity = [...item.sprintCapacity];
-                              sprintCapacity[index] = parseNumber(e.target.value, 0);
-                              return { ...item, sprintCapacity };
-                            })
+                <div key={engineer.id} className="engineer-card">
+                  <div className="engineer-head">
+                    <span className="initials">{engineer.initials}</span>
+                    <input
+                      value={engineer.name}
+                      onChange={(e) =>
+                        setEngineers((prev) =>
+                          prev.map((item) =>
+                            item.id === engineer.id ? { ...item, name: e.target.value, initials: initialsFromName(e.target.value) } : item
                           )
-                        }
-                      />
-                    ))}
+                        )
+                      }
+                    />
+                    <button className="icon-btn" onClick={() => setEngineers((prev) => prev.filter((item) => item.id !== engineer.id))}>
+                      ×
+                    </button>
                   </div>
-                  <button onClick={() => setEngineers((prev) => prev.filter((item) => item.id !== engineer.id))}>−</button>
+                  <div className="capacity-row">
+                    <span>Capacity</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={engineer.sprintCapacity[0] ?? 0}
+                      onChange={(e) =>
+                        setEngineers((prev) =>
+                          prev.map((item) => {
+                            if (item.id !== engineer.id) return item;
+                            const sprintCapacity = [...item.sprintCapacity];
+                            sprintCapacity[0] = clampPercent(parseNumber(e.target.value, 0));
+                            return { ...item, sprintCapacity };
+                          })
+                        )
+                      }
+                    />
+                    <strong>{engineer.sprintCapacity[0] ?? 0}%</strong>
+                  </div>
+                  <div className="capacity-pills">
+                    <span className="muted-pill">Capacity {engineer.sprintCapacity[0] ?? 0}%</span>
+                    <span className="muted-pill">Available {Math.max(0, (engineer.sprintCapacity[0] ?? 0) - Math.round(teamLoad / Math.max(teamEngineers.length, 1)))}%</span>
+                    <span className="muted-pill">Over {Math.max(0, Math.round(teamLoad / Math.max(teamEngineers.length, 1)) - (engineer.sprintCapacity[0] ?? 0))}%</span>
+                  </div>
                 </div>
               ))}
+
               <button className="text-btn" onClick={() => addEngineer(team.id)}>
                 + Add engineer
               </button>
 
-              <div className="load-label">External load per sprint</div>
-              {loads.map((load) => (
-                <div key={load.id} className="load-row">
-                  <input
-                    value={load.name}
-                    onChange={(e) =>
-                      setExternalLoads((prev) => prev.map((row) => (row.id === load.id ? { ...row, name: e.target.value } : row)))
-                    }
-                  />
-                  <div className="capacity-inline">
-                    {Array.from({ length: settings.totalSprints }, (_, index) => (
+              <div className="external-section">
+                <div className="load-label">External</div>
+                <div className="pill-stack">
+                  {loads.map((load) => (
+                    <div key={load.id} className="external-pill-row">
                       <input
-                        key={`${load.id}-${index}`}
+                        className="pill-name"
+                        value={load.name}
+                        onChange={(e) =>
+                          setExternalLoads((prev) => prev.map((row) => (row.id === load.id ? { ...row, name: e.target.value } : row)))
+                        }
+                      />
+                      <input
+                        className="pill-value"
                         type="number"
                         min={0}
-                        value={load.sprintLoad[index] ?? 0}
+                        max={100}
+                        value={load.sprintLoad[0] ?? 0}
                         onChange={(e) =>
                           setExternalLoads((prev) =>
                             prev.map((row) => {
                               if (row.id !== load.id) return row;
                               const sprintLoad = [...row.sprintLoad];
-                              sprintLoad[index] = parseNumber(e.target.value, 0);
+                              sprintLoad[0] = clampPercent(parseNumber(e.target.value, 0));
                               return { ...row, sprintLoad };
                             })
                           )
                         }
                       />
-                    ))}
-                  </div>
-                  <button onClick={() => setExternalLoads((prev) => prev.filter((row) => row.id !== load.id))}>−</button>
+                      <span className="pill-unit">%</span>
+                      <button className="icon-btn" onClick={() => setExternalLoads((prev) => prev.filter((row) => row.id !== load.id))}>
+                        ×
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ))}
-              <button className="text-btn" onClick={() => addExternalLoad(team.id)}>
-                + Add external variable
-              </button>
+                <button className="text-btn" onClick={() => addExternalLoad(team.id)}>
+                  + Add external
+                </button>
+              </div>
+
+              <div className="team-capacity-wrap">
+                <div className="team-capacity-meta">
+                  <span>Capacity {teamBase}%</span>
+                  <span>Available {teamAvailable}%</span>
+                  {overBy > 0 ? <span>Over {overBy}%</span> : <span>Over 0%</span>}
+                </div>
+                <div className="capacity-bar-shell thin">
+                  <div className={`capacity-fill ${overBy > 0 ? "over" : teamAvailable < teamBase * 0.15 ? "high" : "healthy"}`} style={{ width: `${Math.min(100, (teamAvailable / Math.max(teamBase, 1)) * 100)}%` }} />
+                </div>
+              </div>
             </section>
           );
         })}
@@ -331,8 +383,8 @@ export default function HomePage() {
           <div>
             <h1>Roadmap Planner</h1>
             <p>
-              {teams.length} teams · {initiatives.length} initiatives · {totalEffort}pts effort · base {totalBaseCapacityPerSprint}
-              pts/sprint · external {totalExternalPerSprint}
+              {teams.length} teams · {initiatives.length} initiatives · {totalEffort}% effort · capacity {totalBaseCapacityPerSprint}% / sprint ·
+              external {totalExternalPerSprint}%
             </p>
           </div>
           <div className="top-actions">
@@ -340,13 +392,13 @@ export default function HomePage() {
               Sprints
               <input
                 type="number"
-                min={4}
+                min={1}
+                max={20}
                 value={settings.totalSprints}
-                onChange={(e) => setSettings((prev) => ({ ...prev, totalSprints: parseNumber(e.target.value, 10) }))}
-                title="Total sprints"
+                onChange={(e) => setSettings((prev) => ({ ...prev, totalSprints: parseNumber(e.target.value, 1) }))}
               />
             </label>
-            <button onClick={resetSample}>Reset</button>
+            <button onClick={resetToSample}>Reset</button>
             <button className="primary" onClick={runSchedule}>
               Schedule
             </button>
@@ -355,33 +407,59 @@ export default function HomePage() {
 
         <section className="mapper-card">
           <div className="section-title">
-            <strong>Capacity model (clear math)</strong>
-            <Hint text="1 effort point consumes 1 available capacity point. Available capacity is reduced by external variables before scheduling starts." />
+            <h3>Capacity model</h3>
+            <Hint text="Per sprint: available capacity = engineer capacity (%) − external (%) − scheduled effort (%)." />
           </div>
           <p>
-            <strong>Per team and sprint:</strong> available capacity = engineer capacity − external load. Scheduler then allocates initiative effort by priority and dependencies into those available points.
+            <strong>Per team, per sprint:</strong> available capacity = sum(engineer capacity %) − external %. The scheduler allocates
+            initiative effort percentages by priority and dependencies.
           </p>
         </section>
 
         <section className="initiatives-panel">
           <div className="section-heading">
             <div className="section-title">
-              <h3>Initiative input</h3>
-              <Hint text="Simplified form: define effort, team, priority, and optional target range. Multi-select dependencies for sequence constraints." />
+              <h3>Initiatives</h3>
+              <Hint text="Minimal list by default: we show 3 initiatives per page. Use pager controls to review more." />
             </div>
-            <button onClick={addInitiative}>+ Add</button>
+            <div className="initiative-actions">
+              <div className="pager" aria-label="Initiative pages">
+                <button
+                  className="icon-btn"
+                  title="Previous page"
+                  onClick={() => setInitiativePage((prev) => Math.max(0, prev - 1))}
+                  disabled={normalizedInitiativePage === 0}
+                >
+                  ‹
+                </button>
+                <span className="pager-label">
+                  Page {normalizedInitiativePage + 1} / {initiativePages}
+                </span>
+                <button
+                  className="icon-btn"
+                  title="Next page"
+                  onClick={() => setInitiativePage((prev) => Math.min(initiativePages - 1, prev + 1))}
+                  disabled={normalizedInitiativePage >= initiativePages - 1}
+                >
+                  ›
+                </button>
+              </div>
+              <button title="Create a new initiative" onClick={addInitiative}>
+                + Add initiative
+              </button>
+            </div>
           </div>
           <div className="initiative-row labels">
             <span>Name</span>
-            <span>Prio</span>
-            <span>Effort</span>
+            <span>Priority</span>
+            <span>Effort %</span>
             <span>Team</span>
-            <span>Deps</span>
+            <span>Dependencies</span>
             <span>Target start</span>
             <span>Target end</span>
             <span />
           </div>
-          {sortedInitiatives.map((initiative) => (
+          {pagedInitiatives.map((initiative) => (
             <div key={initiative.id} className="initiative-row">
               <input
                 value={initiative.name}
@@ -389,6 +467,7 @@ export default function HomePage() {
                   setInitiatives((prev) => prev.map((item) => (item.id === initiative.id ? { ...item, name: e.target.value } : item)))
                 }
                 placeholder="Initiative"
+                title="Initiative name"
               />
               <select
                 value={initiative.priority}
@@ -408,6 +487,7 @@ export default function HomePage() {
               <input
                 type="number"
                 min={1}
+                title="Effort as percentage of one engineer sprint"
                 value={initiative.effort}
                 onChange={(e) =>
                   setInitiatives((prev) =>
@@ -429,6 +509,7 @@ export default function HomePage() {
               </select>
               <select
                 multiple
+                title="Hold Cmd/Ctrl to select dependencies"
                 value={initiative.dependencyIds}
                 onChange={(e) => {
                   const dependencyIds = Array.from(e.target.selectedOptions, (option) => option.value);
@@ -485,7 +566,9 @@ export default function HomePage() {
                   );
                 }}
               />
-              <button onClick={() => setInitiatives((prev) => prev.filter((item) => item.id !== initiative.id))}>×</button>
+              <button className="icon-btn" onClick={() => setInitiatives((prev) => prev.filter((item) => item.id !== initiative.id))}>
+                ×
+              </button>
             </div>
           ))}
         </section>
@@ -493,7 +576,7 @@ export default function HomePage() {
         <section className="capacity-map-panel">
           <div className="section-title">
             <h3>Sprint map: capacity vs effort</h3>
-            <Hint text="Blue = base team capacity. Purple = external load. Teal = scheduled effort consumption from roadmap initiatives." />
+            <Hint text="Muted bars show base capacity, external usage, and scheduled effort." />
           </div>
           {!output ? (
             <p className="placeholder">Schedule once to render the sprint map.</p>
@@ -505,15 +588,15 @@ export default function HomePage() {
                   <div className="metric-bar-shell">
                     <div className="metric-bar base" style={{ width: `${(item.base / item.max) * 100}%` }} />
                   </div>
-                  <div className="metric-meta">Base {item.base}</div>
+                  <div className="metric-meta">Capacity {item.base}%</div>
                   <div className="metric-bar-shell">
                     <div className="metric-bar load" style={{ width: `${(item.load / item.max) * 100}%` }} />
                   </div>
-                  <div className="metric-meta">External {item.load}</div>
+                  <div className="metric-meta">External {item.load}%</div>
                   <div className="metric-bar-shell">
                     <div className="metric-bar used" style={{ width: `${(item.used / item.max) * 100}%` }} />
                   </div>
-                  <div className="metric-meta">Effort used {item.used} / Available {item.available}</div>
+                  <div className="metric-meta">Effort used {item.used}% / Available {item.available}%</div>
                 </div>
               ))}
             </div>
@@ -523,7 +606,7 @@ export default function HomePage() {
         <section className="timeline-panel">
           <div className="section-title">
             <h3>Roadmap timeline by sprint</h3>
-            <Hint text="Each cell is effort points assigned in that sprint. Bars show initiative duration and priority color." />
+            <Hint text="Each cell is effort % assigned in that sprint." />
           </div>
           <div className="timeline-grid" style={{ gridTemplateColumns: `220px repeat(${settings.totalSprints}, minmax(48px, 1fr))` }}>
             <div className="timeline-header">Initiative</div>
@@ -543,7 +626,7 @@ export default function HomePage() {
                   const points = row.allocations.find((allocation) => allocation.sprint === sprint)?.points ?? 0;
                   return (
                     <div key={`${row.initiativeId}-${sprint}`} className="timeline-cell">
-                      {points > 0 ? points : ""}
+                      {points > 0 ? `${points}%` : ""}
                     </div>
                   );
                 })}
@@ -560,7 +643,7 @@ export default function HomePage() {
         <section className="capacity-panel">
           <div className="section-title">
             <h3>Per team, per sprint utilization</h3>
-            <Hint text="Shows used / available after external load deduction. High utilization warns for delivery risk." />
+            <Hint text="Capacity, external and effort are shown as percentages." />
           </div>
           <div className="capacity-grid">
             {(output?.capacity ?? []).map((cell) => (
@@ -569,11 +652,11 @@ export default function HomePage() {
                   <span>{teamsById.get(cell.teamId)?.name}</span>
                   <span>S{cell.sprint}</span>
                 </div>
-                <div className="capacity-bar-shell">
+                <div className="capacity-bar-shell thin">
                   <div className={`capacity-fill ${cell.status}`} style={{ width: `${Math.min(100, cell.utilizationPct)}%` }} />
                 </div>
                 <small>
-                  {cell.used}/{cell.capacity} pts · base {cell.baseCapacity} · ext {cell.externalLoad}
+                  {cell.used}% / {cell.capacity}% · base {cell.baseCapacity}% · ext {cell.externalLoad}%
                 </small>
               </div>
             ))}
