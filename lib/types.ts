@@ -1,36 +1,46 @@
+export type Priority = "P0" | "P1" | "P2" | "P3";
+
+export type Engineer = {
+  id: string;
+  name: string;
+  initials: string;
+  avatar?: string;
+  teamId: string;
+  sprintCapacity: number[];
+};
+
 export type Team = {
   id: string;
   name: string;
-  weeklyCapacityPoints: number;
+  engineerIds: string[];
 };
 
 export type TargetWindow = {
-  startWeek: number;
-  endWeek: number;
+  startSprint: number;
+  endSprint: number;
 };
 
 export type Initiative = {
   id: string;
   name: string;
-  teamId: string;
-  sizePoints: number;
-  priority: number;
+  effort: number;
+  priority: Priority;
   dependencyIds: string[];
   targetWindow?: TargetWindow;
+  teamId: string;
 };
 
 export type PlanInput = {
   teams: Team[];
+  engineers: Engineer[];
   initiatives: Initiative[];
   settings: {
-    startWeek: number;
-    totalWeeks: number;
-    strictTargetWindow: boolean;
+    totalSprints: number;
   };
 };
 
 export type Allocation = {
-  week: number;
+  sprint: number;
   points: number;
 };
 
@@ -38,18 +48,15 @@ export type ScheduledInitiative = {
   initiativeId: string;
   initiativeName: string;
   teamId: string;
+  priority: Priority;
   allocations: Allocation[];
-  unscheduledPoints: number;
+  startSprint: number | null;
+  endSprint: number | null;
+  remainingEffort: number;
+  reasoning: string;
 };
 
-export type ChangelogLevel =
-  | "PLACED"
-  | "DELAYED"
-  | "UNSCHEDULED"
-  | "CAPACITY_LIMIT"
-  | "DEPENDENCY_BLOCKED"
-  | "TARGET_WINDOW_MISSED"
-  | "INVALID";
+export type ChangelogLevel = "PLACED" | "WINDOW_MISSED" | "CONFLICT" | "BLOCKED" | "INFO";
 
 export type ChangelogEntry = {
   id: string;
@@ -59,10 +66,11 @@ export type ChangelogEntry = {
 
 export type CapacityCell = {
   teamId: string;
-  week: number;
+  sprint: number;
   used: number;
   capacity: number;
   utilizationPct: number;
+  status: "healthy" | "high" | "over";
 };
 
 export type PlanOutput = {
@@ -72,41 +80,34 @@ export type PlanOutput = {
 };
 
 export const DEFAULT_SETTINGS: PlanInput["settings"] = {
-  startWeek: 1,
-  totalWeeks: 12,
-  strictTargetWindow: false
+  totalSprints: 10
 };
 
 export const SAMPLE_PLAN: Omit<PlanInput, "settings"> = {
   teams: [
-    { id: "team-platform", name: "Platform", weeklyCapacityPoints: 12 },
-    { id: "team-growth", name: "Growth", weeklyCapacityPoints: 10 }
+    { id: "team-frontend", name: "Frontend", engineerIds: ["eng-alice", "eng-bob", "eng-cara"] },
+    { id: "team-backend", name: "Backend", engineerIds: ["eng-dan", "eng-eve"] }
+  ],
+  engineers: [
+    { id: "eng-alice", name: "Alice Chen", initials: "A", teamId: "team-frontend", sprintCapacity: [8, 8, 8, 8, 8, 8, 7, 8, 8, 8] },
+    { id: "eng-bob", name: "Bob Kumar", initials: "B", teamId: "team-frontend", sprintCapacity: [6, 6, 6, 6, 6, 5, 6, 6, 6, 6] },
+    { id: "eng-cara", name: "Cara Jones", initials: "C", teamId: "team-frontend", sprintCapacity: [5, 5, 5, 4, 5, 5, 5, 5, 5, 5] },
+    { id: "eng-dan", name: "Dan Park", initials: "D", teamId: "team-backend", sprintCapacity: [10, 10, 9, 10, 10, 10, 10, 10, 10, 10] },
+    { id: "eng-eve", name: "Eve Santos", initials: "E", teamId: "team-backend", sprintCapacity: [8, 8, 8, 8, 8, 7, 8, 8, 8, 8] }
   ],
   initiatives: [
+    { id: "init-auth", name: "User Auth Flow", effort: 13, priority: "P0", dependencyIds: [], teamId: "team-backend" },
+    { id: "init-dashboard", name: "Dashboard UI", effort: 21, priority: "P1", dependencyIds: ["init-auth"], teamId: "team-frontend" },
+    { id: "init-api", name: "API Gateway", effort: 8, priority: "P0", dependencyIds: [], teamId: "team-backend" },
+    { id: "init-search", name: "Search Feature", effort: 13, priority: "P2", dependencyIds: ["init-dashboard"], teamId: "team-frontend" },
     {
-      id: "init-auth",
-      name: "Auth Revamp",
-      teamId: "team-platform",
-      sizePoints: 24,
-      priority: 90,
-      dependencyIds: []
-    },
-    {
-      id: "init-onboarding",
-      name: "Self-serve Onboarding",
-      teamId: "team-growth",
-      sizePoints: 18,
-      priority: 80,
-      dependencyIds: ["init-auth"],
-      targetWindow: { startWeek: 3, endWeek: 8 }
-    },
-    {
-      id: "init-analytics",
-      name: "Usage Analytics",
-      teamId: "team-growth",
-      sizePoints: 16,
-      priority: 70,
-      dependencyIds: []
+      id: "init-payment",
+      name: "Payment Integration",
+      effort: 18,
+      priority: "P1",
+      dependencyIds: ["init-auth", "init-api"],
+      targetWindow: { startSprint: 3, endSprint: 6 },
+      teamId: "team-backend"
     }
   ]
 };
