@@ -1,178 +1,203 @@
-import { type Allocation, type ChangelogEntry, type Initiative, type PlanInput, type PlanOutput } from "@/lib/types";
+import { type ChangelogEntry, type Initiative, type PlanInput, type PlanOutput, type Priority } from "@/lib/types";
 
 function log(level: ChangelogEntry["level"], message: string): ChangelogEntry {
-  return { id: `${level}-${Math.random().toString(36).slice(2, 8)}`, level, message };
+  return { id: `${level}-${Math.random().toString(36).slice(2, 9)}`, level, message };
 }
 
-function sortInitiatives(initiatives: Initiative[]) {
+const PRIORITY_ORDER: Record<Priority, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
+
+function sortByPriority(initiatives: Initiative[]) {
   return [...initiatives].sort((a, b) => {
-    if (b.priority !== a.priority) return b.priority - a.priority;
-    if (a.sizePoints !== b.sizePoints) return a.sizePoints - b.sizePoints;
+    const byPriority = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
+    if (byPriority !== 0) return byPriority;
+    if (a.effort !== b.effort) return a.effort - b.effort;
     return a.name.localeCompare(b.name);
   });
 }
 
-function findCycles(initiatives: Initiative[]): Set<string> {
-  const byId = new Map(initiatives.map((i) => [i.id, i]));
-  const visiting = new Set<string>();
-  const visited = new Set<string>();
-  const cycleMembers = new Set<string>();
+function topologicalSort(initiatives: Initiative[]) {
+  const byId = new Map(initiatives.map((initiative) => [initiative.id, initiative]));
+  const visitState = new Map<string, "visiting" | "done">();
+  const cycleIds = new Set<string>();
+  const ordered: Initiative[] = [];
 
-  function dfs(id: string) {
-    if (visiting.has(id)) {
-      cycleMembers.add(id);
+  function visit(id: string) {
+    if (visitState.get(id) === "done") return;
+    if (visitState.get(id) === "visiting") {
+      cycleIds.add(id);
       return;
     }
-    if (visited.has(id)) return;
-    visiting.add(id);
 
+    visitState.set(id, "visiting");
     const initiative = byId.get(id);
     if (initiative) {
       for (const dep of initiative.dependencyIds) {
-        dfs(dep);
-        if (cycleMembers.has(dep)) cycleMembers.add(id);
+        visit(dep);
+        if (cycleIds.has(dep)) {
+          cycleIds.add(id);
+        }
       }
+      ordered.push(initiative);
     }
-
-    visiting.delete(id);
-    visited.add(id);
+    visitState.set(id, "done");
   }
 
-  initiatives.forEach((i) => dfs(i.id));
-  return cycleMembers;
+  initiatives.forEach((initiative) => visit(initiative.id));
+  return {
+    cycleIds,
+    ordered: sortByPriority(ordered).sort((a, b) => {
+      const depA = a.dependencyIds.includes(b.id) ? 1 : 0;
+      const depB = b.dependencyIds.includes(a.id) ? 1 : 0;
+      return depA - depB;
+    })
+  };
+}
+
+function getTeamCapacityBySprint(input: PlanInput) {
+  const capacityBySprint = new Map<string, number[]>();
+
+  for (const team of input.teams) {
+    capacityBySprint.set(team.id, Array.from({ length: input.settings.totalSprints }, () => 0));
+  }
+
+  for (const engineer of input.engineers) {
+    const capacity = capacityBySprint.get(engineer.teamId);
+    if (!capacity) continue;
+    for (let index = 0; index < input.settings.totalSprints; index += 1) {
+      capacity[index] += engineer.sprintCapacity[index] ?? 0;
+    }
+  }
+
+  return capacityBySprint;
 }
 
 export function generateRoadmap(input: PlanInput): PlanOutput {
-  const { teams, settings } = input;
-  const initiatives = sortInitiatives(input.initiatives);
-
   const changelog: ChangelogEntry[] = [];
-  const teamCapacity = new Map(teams.map((team) => [team.id, team.weeklyCapacityPoints]));
-  const used = new Map<string, number>();
-  const completionWeek = new Map<string, number>();
+  const teamCapacity = getTeamCapacityBySprint(input);
+  const usedCapacity = new Map<string, number>();
+  const completionByInitiative = new Map<string, number>();
+
+  const { cycleIds, ordered } = topologicalSort(input.initiatives);
   const scheduled: PlanOutput["scheduled"] = [];
 
-  const weeks = Array.from({ length: settings.totalWeeks }, (_, index) => settings.startWeek + index);
-  const cycleIds = findCycles(initiatives);
-
-  for (const initiative of initiatives) {
+  for (const initiative of ordered) {
     if (cycleIds.has(initiative.id)) {
-      changelog.push(log("DEPENDENCY_BLOCKED", `${initiative.name} blocked by dependency cycle.`));
-      continue;
-    }
-    if (!teamCapacity.has(initiative.teamId)) {
-      changelog.push(log("INVALID", `${initiative.name} references missing team ${initiative.teamId}.`));
+      changelog.push(log("BLOCKED", `${initiative.name} is blocked by a dependency cycle.`));
       continue;
     }
 
-    let earliestWeek = settings.startWeek;
-    let blocked = false;
+    const teamSprints = teamCapacity.get(initiative.teamId);
+    if (!teamSprints) {
+      changelog.push(log("CONFLICT", `${initiative.name} references an unknown team.`));
+      continue;
+    }
+
+    let earliestSprint = 1;
+    const dependencyReasons: string[] = [];
+    let dependencyBlocked = false;
+
     for (const depId of initiative.dependencyIds) {
-      if (!completionWeek.has(depId)) {
-        blocked = true;
-        changelog.push(log("DEPENDENCY_BLOCKED", `${initiative.name} could not start because dependency ${depId} is not scheduled.`));
+      const depEnd = completionByInitiative.get(depId);
+      if (!depEnd) {
+        dependencyBlocked = true;
+        changelog.push(
+          log("BLOCKED", `${initiative.name} could not be scheduled because dependency ${depId} did not finish.`)
+        );
         break;
       }
-      earliestWeek = Math.max(earliestWeek, (completionWeek.get(depId) ?? settings.startWeek) + 1);
+      earliestSprint = Math.max(earliestSprint, depEnd + 1);
+      dependencyReasons.push(`${depId} finishes S${depEnd}`);
     }
-    if (blocked) continue;
+
+    if (dependencyBlocked) continue;
 
     if (initiative.targetWindow) {
-      earliestWeek = Math.max(earliestWeek, initiative.targetWindow.startWeek);
+      earliestSprint = Math.max(earliestSprint, initiative.targetWindow.startSprint);
     }
 
-    let remaining = initiative.sizePoints;
-    const allocations: Allocation[] = [];
-    let startedWeek: number | null = null;
-    let finalWeek: number | null = null;
+    const allocations: { sprint: number; points: number }[] = [];
+    let remaining = initiative.effort;
 
-    for (const week of weeks) {
-      if (week < earliestWeek) continue;
+    for (let sprint = earliestSprint; sprint <= input.settings.totalSprints; sprint += 1) {
       if (remaining <= 0) break;
-
-      if (
-        settings.strictTargetWindow &&
-        initiative.targetWindow &&
-        week > initiative.targetWindow.endWeek
-      ) {
-        break;
-      }
-
-      const capKey = `${initiative.teamId}-${week}`;
-      const cap = teamCapacity.get(initiative.teamId) ?? 0;
-      const alreadyUsed = used.get(capKey) ?? 0;
+      const cap = teamSprints[sprint - 1] ?? 0;
+      const usedKey = `${initiative.teamId}-${sprint}`;
+      const alreadyUsed = usedCapacity.get(usedKey) ?? 0;
       const free = Math.max(0, cap - alreadyUsed);
-
       if (free <= 0) continue;
 
       const slice = Math.min(free, remaining);
-      used.set(capKey, alreadyUsed + slice);
+      usedCapacity.set(usedKey, alreadyUsed + slice);
+      allocations.push({ sprint, points: slice });
       remaining -= slice;
-      allocations.push({ week, points: slice });
-      if (startedWeek === null) startedWeek = week;
-      finalWeek = week;
     }
 
-    if (remaining === 0 && finalWeek !== null) {
-      completionWeek.set(initiative.id, finalWeek);
-      scheduled.push({
-        initiativeId: initiative.id,
-        initiativeName: initiative.name,
-        teamId: initiative.teamId,
-        allocations,
-        unscheduledPoints: 0
-      });
-      changelog.push(
-        log(
-          "PLACED",
-          `${initiative.name} scheduled in W${startedWeek}-W${finalWeek} (priority ${initiative.priority}).`
-        )
-      );
+    const startSprint = allocations[0]?.sprint ?? null;
+    const endSprint = allocations.at(-1)?.sprint ?? null;
 
-      if (
-        initiative.targetWindow &&
-        (startedWeek! < initiative.targetWindow.startWeek || finalWeek > initiative.targetWindow.endWeek)
-      ) {
+    let reasoning = `${initiative.name} placed by ${initiative.priority} priority`;
+    if (dependencyReasons.length > 0) {
+      reasoning += ` after dependencies (${dependencyReasons.join(", ")})`;
+    }
+    if (startSprint && endSprint) {
+      reasoning += ` across S${startSprint}-S${endSprint}`;
+    }
+
+    if (remaining === 0 && endSprint) {
+      completionByInitiative.set(initiative.id, endSprint);
+      changelog.push(log("PLACED", reasoning));
+
+      if (initiative.targetWindow && endSprint > initiative.targetWindow.endSprint) {
         changelog.push(
           log(
-            "TARGET_WINDOW_MISSED",
-            `${initiative.name} spilled outside requested window W${initiative.targetWindow.startWeek}-W${initiative.targetWindow.endWeek}.`
+            "WINDOW_MISSED",
+            `${initiative.name} missed target window S${initiative.targetWindow.startSprint}-S${initiative.targetWindow.endSprint}; finished in S${endSprint}.`
           )
         );
       }
     } else {
-      scheduled.push({
-        initiativeId: initiative.id,
-        initiativeName: initiative.name,
-        teamId: initiative.teamId,
-        allocations,
-        unscheduledPoints: remaining
-      });
       changelog.push(
         log(
-          "UNSCHEDULED",
-          `${initiative.name} only scheduled ${initiative.sizePoints - remaining}/${initiative.sizePoints} points due to capacity/horizon limits.`
+          "CONFLICT",
+          `${initiative.name} could not fully fit. Scheduled ${initiative.effort - remaining}/${initiative.effort} points.`
         )
       );
-      if (allocations.length > 0) {
+      if (initiative.targetWindow) {
         changelog.push(
           log(
-            "CAPACITY_LIMIT",
-            `${initiative.name} started in W${allocations[0].week} but could not finish in the planning horizon.`
+            "WINDOW_MISSED",
+            `${initiative.name} could not fit target window S${initiative.targetWindow.startSprint}-S${initiative.targetWindow.endSprint} due to team capacity.`
           )
         );
       }
     }
+
+    scheduled.push({
+      initiativeId: initiative.id,
+      initiativeName: initiative.name,
+      teamId: initiative.teamId,
+      priority: initiative.priority,
+      allocations,
+      startSprint,
+      endSprint,
+      remainingEffort: remaining,
+      reasoning
+    });
   }
 
-  const capacity = teams.flatMap((team) =>
-    weeks.map((week) => {
-      const cap = team.weeklyCapacityPoints;
-      const usage = used.get(`${team.id}-${week}`) ?? 0;
-      const utilizationPct = cap === 0 ? 0 : Math.round((usage / cap) * 100);
-      return { teamId: team.id, week, used: usage, capacity: cap, utilizationPct };
-    })
-  );
+  const capacity = input.teams.flatMap((team) => {
+    const sprints = teamCapacity.get(team.id) ?? [];
+    return Array.from({ length: input.settings.totalSprints }, (_, index) => {
+      const sprint = index + 1;
+      const cap = sprints[index] ?? 0;
+      const used = usedCapacity.get(`${team.id}-${sprint}`) ?? 0;
+      const utilizationPct = cap === 0 ? 0 : Math.round((used / cap) * 100);
+      const status: "healthy" | "high" | "over" = utilizationPct > 100 ? "over" : utilizationPct >= 86 ? "high" : "healthy";
+      return { teamId: team.id, sprint, used, capacity: cap, utilizationPct, status };
+    });
+  });
+
+  changelog.push(log("INFO", "Auto-schedule complete. Edit inputs and run again for what-if diffs."));
 
   return { scheduled, capacity, changelog };
 }
