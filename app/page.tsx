@@ -1,24 +1,29 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { generateRoadmap } from "@/lib/scheduler";
 import {
   DEFAULT_SETTINGS,
   SAMPLE_PLAN,
   type ChangelogEntry,
+  type Engineer,
   type Initiative,
   type PlanInput,
   type PlanOutput,
+  type Priority,
   type Team
 } from "@/lib/types";
 
 type DraftState = {
   teams: Team[];
+  engineers: Engineer[];
   initiatives: Initiative[];
   settings: PlanInput["settings"];
 };
 
-const STORAGE_KEY = "ai-pm-roadmap-v01";
+const STORAGE_KEY = "ai-pm-roadmap-v02";
+
+const PRIORITIES: Priority[] = ["P0", "P1", "P2", "P3"];
 
 function uid(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
@@ -29,12 +34,21 @@ function parseNumber(value: string, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function initialsFromName(name: string) {
+  const words = name.trim().split(" ").filter(Boolean);
+  if (words.length === 0) return "?";
+  if (words.length === 1) return words[0][0]?.toUpperCase() ?? "?";
+  return `${words[0][0] ?? ""}${words[1][0] ?? ""}`.toUpperCase();
+}
+
 export default function HomePage() {
   const [teams, setTeams] = useState<Team[]>(SAMPLE_PLAN.teams);
+  const [engineers, setEngineers] = useState<Engineer[]>(SAMPLE_PLAN.engineers);
   const [initiatives, setInitiatives] = useState<Initiative[]>(SAMPLE_PLAN.initiatives);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [output, setOutput] = useState<PlanOutput | null>(null);
-  const [message, setMessage] = useState<string>("Edit inputs and generate a roadmap.");
+  const [message, setMessage] = useState("Edit inputs, then schedule the roadmap.");
+  const [newTeamName, setNewTeamName] = useState("");
 
   useEffect(() => {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -42,6 +56,7 @@ export default function HomePage() {
     try {
       const parsed = JSON.parse(raw) as DraftState;
       setTeams(parsed.teams ?? SAMPLE_PLAN.teams);
+      setEngineers(parsed.engineers ?? SAMPLE_PLAN.engineers);
       setInitiatives(parsed.initiatives ?? SAMPLE_PLAN.initiatives);
       setSettings(parsed.settings ?? DEFAULT_SETTINGS);
       setMessage("Loaded your local draft.");
@@ -50,31 +65,59 @@ export default function HomePage() {
     }
   }, []);
 
-  const teamNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    teams.forEach((team) => map.set(team.id, team.name));
-    return map;
-  }, [teams]);
+  const teamsById = useMemo(() => new Map(teams.map((team) => [team.id, team])), [teams]);
+
+  const teamCapacitySummary = useMemo(() => {
+    const summary = new Map<string, number>();
+    for (const team of teams) {
+      summary.set(team.id, 0);
+    }
+    engineers.forEach((engineer) => {
+      const current = summary.get(engineer.teamId) ?? 0;
+      summary.set(engineer.teamId, current + (engineer.sprintCapacity[0] ?? 0));
+    });
+    return summary;
+  }, [engineers, teams]);
 
   const sortedInitiatives = useMemo(
     () => [...initiatives].sort((a, b) => a.name.localeCompare(b.name)),
     [initiatives]
   );
 
-  function runGenerate() {
-    const result = generateRoadmap({ teams, initiatives, settings });
-    setOutput(result);
-    setMessage(`Generated roadmap with ${result.scheduled.length} scheduled initiatives.`);
+  function runSchedule() {
+    const previous = output;
+    const next = generateRoadmap({ teams, engineers, initiatives, settings });
+
+    if (previous) {
+      const previousById = new Map(previous.scheduled.map((row) => [row.initiativeId, row]));
+      const diffLogs: ChangelogEntry[] = [];
+      next.scheduled.forEach((row) => {
+        const old = previousById.get(row.initiativeId);
+        if (!old) return;
+        if (old.startSprint !== row.startSprint || old.endSprint !== row.endSprint || old.remainingEffort !== row.remainingEffort) {
+          diffLogs.push({
+            id: `DIFF-${row.initiativeId}`,
+            level: "INFO",
+            message: `${row.initiativeName} changed from S${old.startSprint ?? "-"}-S${old.endSprint ?? "-"} to S${row.startSprint ?? "-"}-S${row.endSprint ?? "-"}.`
+          });
+        }
+      });
+      next.changelog = [...diffLogs, ...next.changelog];
+    }
+
+    setOutput(next);
+    setMessage(`Scheduled ${next.scheduled.length} initiatives across ${settings.totalSprints} sprints.`);
   }
 
   function saveDraft() {
-    const payload: DraftState = { teams, initiatives, settings };
+    const payload: DraftState = { teams, engineers, initiatives, settings };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     setMessage("Saved draft locally.");
   }
 
   function resetSample() {
     setTeams(SAMPLE_PLAN.teams);
+    setEngineers(SAMPLE_PLAN.engineers);
     setInitiatives(SAMPLE_PLAN.initiatives);
     setSettings(DEFAULT_SETTINGS);
     setOutput(null);
@@ -82,314 +125,335 @@ export default function HomePage() {
   }
 
   function addTeam() {
-    setTeams((prev) => [...prev, { id: uid("team"), name: "New Team", weeklyCapacityPoints: 10 }]);
+    if (!newTeamName.trim()) return;
+    setTeams((prev) => [...prev, { id: uid("team"), name: newTeamName.trim(), engineerIds: [] }]);
+    setNewTeamName("");
+  }
+
+  function addEngineer(teamId: string) {
+    const id = uid("eng");
+    setEngineers((prev) => [
+      ...prev,
+      {
+        id,
+        name: "New Engineer",
+        initials: "NE",
+        teamId,
+        sprintCapacity: Array.from({ length: settings.totalSprints }, () => 6)
+      }
+    ]);
+    setTeams((prev) => prev.map((team) => (team.id === teamId ? { ...team, engineerIds: [...team.engineerIds, id] } : team)));
   }
 
   function addInitiative() {
+    const firstTeam = teams[0]?.id;
+    if (!firstTeam) return;
     setInitiatives((prev) => [
       ...prev,
       {
         id: uid("init"),
         name: "New Initiative",
-        teamId: teams[0]?.id ?? "",
-        sizePoints: 8,
-        priority: 50,
-        dependencyIds: []
+        effort: 8,
+        priority: "P2",
+        dependencyIds: [],
+        teamId: firstTeam
       }
     ]);
   }
 
-  function renderChangelogItem(entry: ChangelogEntry) {
-    return (
-      <li key={entry.id} className={`log-${entry.level}`}>
-        <strong>{entry.level}</strong> · {entry.message}
-      </li>
-    );
+  function removeTeam(teamId: string) {
+    setTeams((prev) => prev.filter((team) => team.id !== teamId));
+    setEngineers((prev) => prev.filter((engineer) => engineer.teamId !== teamId));
+    setInitiatives((prev) => prev.filter((initiative) => initiative.teamId !== teamId));
   }
 
+  const totalEffort = initiatives.reduce((sum, initiative) => sum + initiative.effort, 0);
+  const totalCapacityPerSprint = teams.reduce((sum, team) => sum + (teamCapacitySummary.get(team.id) ?? 0), 0);
+
   return (
-    <main className="page">
-      <h1>Capacity-aware Roadmap Builder</h1>
-      <p className="subtitle">{message}</p>
+    <main className="app-shell">
+      <aside className="sidebar">
+        <h2>Teams</h2>
+        <div className="team-adder">
+          <input value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} placeholder="New team..." />
+          <button onClick={addTeam}>+</button>
+        </div>
 
-      <section className="toolbar">
-        <button onClick={runGenerate}>Generate roadmap</button>
-        <button onClick={saveDraft}>Save draft</button>
-        <button onClick={resetSample}>Reset sample data</button>
-      </section>
-
-      <section className="layout">
-        <div className="panel">
-          <h2>Teams</h2>
-          <button onClick={addTeam}>Add team</button>
-          {teams.length === 0 && <p className="empty">Add at least one team.</p>}
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Weekly capacity</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {teams.map((team) => (
-                <tr key={team.id}>
-                  <td>
-                    <input
-                      value={team.name}
-                      onChange={(e) =>
-                        setTeams((prev) => prev.map((t) => (t.id === team.id ? { ...t, name: e.target.value } : t)))
-                      }
-                    />
-                  </td>
-                  <td>
-                    <input
-                      type="number"
-                      min={0}
-                      value={team.weeklyCapacityPoints}
-                      onChange={(e) =>
-                        setTeams((prev) =>
-                          prev.map((t) =>
-                            t.id === team.id ? { ...t, weeklyCapacityPoints: parseNumber(e.target.value, 0) } : t
-                          )
-                        )
-                      }
-                    />
-                  </td>
-                  <td>
-                    <button onClick={() => setTeams((prev) => prev.filter((t) => t.id !== team.id))}>Delete</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          <h2>Initiatives</h2>
-          <button onClick={addInitiative}>Add initiative</button>
-          {initiatives.length === 0 && <p className="empty">Add at least one initiative.</p>}
-          <div className="initiatives">
-            {initiatives.map((initiative) => (
-              <form key={initiative.id} className="initiative-card" onSubmit={(e: FormEvent) => e.preventDefault()}>
+        {teams.map((team) => {
+          const teamEngineers = engineers.filter((engineer) => engineer.teamId === team.id);
+          return (
+            <section key={team.id} className="team-card">
+              <div className="team-header">
                 <input
-                  value={initiative.name}
-                  onChange={(e) =>
-                    setInitiatives((prev) =>
-                      prev.map((i) => (i.id === initiative.id ? { ...i, name: e.target.value } : i))
-                    )
-                  }
+                  className="team-name"
+                  value={team.name}
+                  onChange={(e) => setTeams((prev) => prev.map((row) => (row.id === team.id ? { ...row, name: e.target.value } : row)))}
                 />
-                <div className="grid-2">
-                  <label>
-                    Team
-                    <select
-                      value={initiative.teamId}
-                      onChange={(e) =>
-                        setInitiatives((prev) =>
-                          prev.map((i) => (i.id === initiative.id ? { ...i, teamId: e.target.value } : i))
+                <span>{teamCapacitySummary.get(team.id) ?? 0}pts</span>
+                <button onClick={() => removeTeam(team.id)}>×</button>
+              </div>
+              {teamEngineers.map((engineer) => (
+                <div key={engineer.id} className="engineer-row">
+                  <span className="initials">{engineer.initials}</span>
+                  <input
+                    value={engineer.name}
+                    onChange={(e) =>
+                      setEngineers((prev) =>
+                        prev.map((item) =>
+                          item.id === engineer.id
+                            ? { ...item, name: e.target.value, initials: initialsFromName(e.target.value) }
+                            : item
                         )
-                      }
-                    >
-                      {teams.map((team) => (
-                        <option key={team.id} value={team.id}>
-                          {team.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Size
-                    <input
-                      type="number"
-                      min={1}
-                      value={initiative.sizePoints}
-                      onChange={(e) =>
-                        setInitiatives((prev) =>
-                          prev.map((i) =>
-                            i.id === initiative.id ? { ...i, sizePoints: parseNumber(e.target.value, 1) } : i
+                      )
+                    }
+                  />
+                  <div className="capacity-inline">
+                    {Array.from({ length: settings.totalSprints }, (_, index) => (
+                      <input
+                        key={`${engineer.id}-cap-${index}`}
+                        type="number"
+                        min={0}
+                        value={engineer.sprintCapacity[index] ?? 0}
+                        onChange={(e) =>
+                          setEngineers((prev) =>
+                            prev.map((item) => {
+                              if (item.id !== engineer.id) return item;
+                              const sprintCapacity = [...item.sprintCapacity];
+                              sprintCapacity[index] = parseNumber(e.target.value, 0);
+                              return { ...item, sprintCapacity };
+                            })
                           )
-                        )
-                      }
-                    />
-                  </label>
-                  <label>
-                    Priority
-                    <input
-                      type="number"
-                      value={initiative.priority}
-                      onChange={(e) =>
-                        setInitiatives((prev) =>
-                          prev.map((i) =>
-                            i.id === initiative.id ? { ...i, priority: parseNumber(e.target.value, 0) } : i
-                          )
-                        )
-                      }
-                    />
-                  </label>
-                  <label>
-                    Dependencies
-                    <select
-                      multiple
-                      value={initiative.dependencyIds}
-                      onChange={(e) => {
-                        const values = Array.from(e.target.selectedOptions, (option) => option.value);
-                        setInitiatives((prev) =>
-                          prev.map((i) => (i.id === initiative.id ? { ...i, dependencyIds: values } : i))
-                        );
-                      }}
-                    >
-                      {sortedInitiatives
-                        .filter((candidate) => candidate.id !== initiative.id)
-                        .map((candidate) => (
-                          <option key={candidate.id} value={candidate.id}>
-                            {candidate.name}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
+                        }
+                      />
+                    ))}
+                  </div>
+                  <button onClick={() => setEngineers((prev) => prev.filter((item) => item.id !== engineer.id))}>−</button>
                 </div>
-                <div className="grid-2">
-                  <label>
-                    Window start (optional)
-                    <input
-                      type="number"
-                      min={1}
-                      value={initiative.targetWindow?.startWeek ?? ""}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        setInitiatives((prev) =>
-                          prev.map((i) =>
-                            i.id === initiative.id
-                              ? {
-                                  ...i,
-                                  targetWindow: value
-                                    ? {
-                                        startWeek: parseNumber(value, 1),
-                                        endWeek: i.targetWindow?.endWeek ?? parseNumber(value, 1)
-                                      }
-                                    : undefined
-                                }
-                              : i
-                          )
-                        );
-                      }}
-                    />
-                  </label>
-                  <label>
-                    Window end (optional)
-                    <input
-                      type="number"
-                      min={1}
-                      value={initiative.targetWindow?.endWeek ?? ""}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        setInitiatives((prev) =>
-                          prev.map((i) =>
-                            i.id === initiative.id
-                              ? {
-                                  ...i,
-                                  targetWindow: value
-                                    ? {
-                                        startWeek: i.targetWindow?.startWeek ?? parseNumber(value, 1),
-                                        endWeek: parseNumber(value, 1)
-                                      }
-                                    : undefined
-                                }
-                              : i
-                          )
-                        );
-                      }}
-                    />
-                  </label>
-                </div>
-                <button onClick={() => setInitiatives((prev) => prev.filter((i) => i.id !== initiative.id))}>Delete</button>
-              </form>
-            ))}
-          </div>
+              ))}
+              <button className="text-btn" onClick={() => addEngineer(team.id)}>
+                + Add engineer
+              </button>
+            </section>
+          );
+        })}
+      </aside>
 
-          <h2>Settings</h2>
-          <div className="grid-2">
-            <label>
-              Total weeks
+      <section className="main-pane">
+        <header className="top-bar">
+          <div>
+            <h1>Roadmap Planner</h1>
+            <p>
+              {teams.length} teams · {initiatives.length} initiatives · {totalEffort}pts effort · {totalCapacityPerSprint}pts/sprint
+              capacity
+            </p>
+          </div>
+          <div className="top-actions">
+            <input
+              type="number"
+              min={4}
+              value={settings.totalSprints}
+              onChange={(e) => setSettings((prev) => ({ ...prev, totalSprints: parseNumber(e.target.value, 10) }))}
+              title="Total sprints"
+            />
+            <button onClick={saveDraft}>Save</button>
+            <button onClick={resetSample}>Reset</button>
+            <button className="primary" onClick={runSchedule}>
+              Schedule
+            </button>
+          </div>
+        </header>
+
+        <section className="initiatives-panel">
+          <div className="section-heading">
+            <h3>Initiatives</h3>
+            <button onClick={addInitiative}>+ Add</button>
+          </div>
+          {sortedInitiatives.map((initiative) => (
+            <div key={initiative.id} className="initiative-row">
+              <input
+                value={initiative.name}
+                onChange={(e) =>
+                  setInitiatives((prev) => prev.map((item) => (item.id === initiative.id ? { ...item, name: e.target.value } : item)))
+                }
+              />
+              <select
+                value={initiative.priority}
+                onChange={(e) =>
+                  setInitiatives((prev) =>
+                    prev.map((item) => (item.id === initiative.id ? { ...item, priority: e.target.value as Priority } : item))
+                  )
+                }
+              >
+                {PRIORITIES.map((priority) => (
+                  <option key={priority} value={priority}>
+                    {priority}
+                  </option>
+                ))}
+              </select>
               <input
                 type="number"
                 min={1}
-                value={settings.totalWeeks}
-                onChange={(e) => setSettings((s) => ({ ...s, totalWeeks: parseNumber(e.target.value, 12) }))}
+                value={initiative.effort}
+                onChange={(e) =>
+                  setInitiatives((prev) =>
+                    prev.map((item) => (item.id === initiative.id ? { ...item, effort: parseNumber(e.target.value, 1) } : item))
+                  )
+                }
               />
-            </label>
-            <label>
-              Strict target window
-              <input
-                type="checkbox"
-                checked={settings.strictTargetWindow}
-                onChange={(e) => setSettings((s) => ({ ...s, strictTargetWindow: e.target.checked }))}
-              />
-            </label>
-          </div>
-        </div>
-
-        <div className="panel">
-          <h2>Timeline</h2>
-          {!output && <p className="empty">Generate roadmap to view timeline.</p>}
-          {output && (
-            <div className="timeline-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Initiative</th>
-                    {Array.from({ length: settings.totalWeeks }, (_, index) => (
-                      <th key={index}>W{index + 1}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {output.scheduled.map((row) => (
-                    <tr key={row.initiativeId}>
-                      <td>{row.initiativeName}</td>
-                      {Array.from({ length: settings.totalWeeks }, (_, index) => {
-                        const week = index + 1;
-                        const points = row.allocations.find((a) => a.week === week)?.points ?? 0;
-                        return <td key={week}>{points > 0 ? points : ""}</td>;
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          <h2>Capacity utilization</h2>
-          {!output && <p className="empty">Generate roadmap to view utilization.</p>}
-          {output && (
-            <table>
-              <thead>
-                <tr>
-                  <th>Team</th>
-                  <th>Week</th>
-                  <th>Used / Capacity</th>
-                </tr>
-              </thead>
-              <tbody>
-                {output.capacity.map((item) => (
-                  <tr key={`${item.teamId}-${item.week}`}>
-                    <td>{teamNameById.get(item.teamId) ?? item.teamId}</td>
-                    <td>W{item.week}</td>
-                    <td>
-                      {item.used} / {item.capacity} ({item.utilizationPct}%)
-                    </td>
-                  </tr>
+              <select
+                value={initiative.teamId}
+                onChange={(e) =>
+                  setInitiatives((prev) => prev.map((item) => (item.id === initiative.id ? { ...item, teamId: e.target.value } : item)))
+                }
+              >
+                {teams.map((team) => (
+                  <option key={team.id} value={team.id}>
+                    {team.name}
+                  </option>
                 ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+              </select>
+              <select
+                multiple
+                value={initiative.dependencyIds}
+                onChange={(e) => {
+                  const dependencyIds = Array.from(e.target.selectedOptions, (option) => option.value);
+                  setInitiatives((prev) => prev.map((item) => (item.id === initiative.id ? { ...item, dependencyIds } : item)));
+                }}
+              >
+                {sortedInitiatives
+                  .filter((candidate) => candidate.id !== initiative.id)
+                  .map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.name}
+                    </option>
+                  ))}
+              </select>
+              <input
+                type="number"
+                placeholder="Start"
+                min={1}
+                value={initiative.targetWindow?.startSprint ?? ""}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setInitiatives((prev) =>
+                    prev.map((item) =>
+                      item.id === initiative.id
+                        ? {
+                            ...item,
+                            targetWindow: value
+                              ? {
+                                  startSprint: parseNumber(value, 1),
+                                  endSprint: item.targetWindow?.endSprint ?? parseNumber(value, 1)
+                                }
+                              : undefined
+                          }
+                        : item
+                    )
+                  );
+                }}
+              />
+              <input
+                type="number"
+                placeholder="End"
+                min={1}
+                value={initiative.targetWindow?.endSprint ?? ""}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setInitiatives((prev) =>
+                    prev.map((item) =>
+                      item.id === initiative.id
+                        ? {
+                            ...item,
+                            targetWindow: value
+                              ? {
+                                  startSprint: item.targetWindow?.startSprint ?? parseNumber(value, 1),
+                                  endSprint: parseNumber(value, 1)
+                                }
+                              : undefined
+                          }
+                        : item
+                    )
+                  );
+                }}
+              />
+              <button onClick={() => setInitiatives((prev) => prev.filter((item) => item.id !== initiative.id))}>×</button>
+            </div>
+          ))}
+        </section>
 
-        <div className="panel">
-          <h2>Changelog & explanations</h2>
-          {!output && <p className="empty">Generate roadmap to get explanations.</p>}
-          {output && <ul className="log-list">{output.changelog.map(renderChangelogItem)}</ul>}
-        </div>
+        <section className="timeline-panel">
+          <h3>Roadmap Timeline</h3>
+          <div className="timeline-grid" style={{ gridTemplateColumns: `200px repeat(${settings.totalSprints}, minmax(50px, 1fr))` }}>
+            <div className="timeline-header">Initiative</div>
+            {Array.from({ length: settings.totalSprints }, (_, i) => (
+              <div key={`head-${i}`} className="timeline-header sprint-col">
+                S{i + 1}
+              </div>
+            ))}
+            {(output?.scheduled ?? []).map((row) => (
+              <Fragment key={row.initiativeId}>
+                <div key={`${row.initiativeId}-name`} className="initiative-name-cell">
+                  <span className={`priority-dot ${row.priority.toLowerCase()}`} />
+                  {teamsById.get(row.teamId)?.name}: {row.initiativeName}
+                </div>
+                {Array.from({ length: settings.totalSprints }, (_, i) => {
+                  const sprint = i + 1;
+                  const points = row.allocations.find((allocation) => allocation.sprint === sprint)?.points ?? 0;
+                  return (
+                    <div key={`${row.initiativeId}-${sprint}`} className="timeline-cell">
+                      {points > 0 ? points : ""}
+                    </div>
+                  );
+                })}
+                {row.startSprint && row.endSprint && (
+                  <div
+                    className={`bar ${row.priority.toLowerCase()}`}
+                    style={{
+                      gridColumn: `${row.startSprint + 1} / ${row.endSprint + 2}`
+                    }}
+                  >
+                    {row.initiativeName}
+                  </div>
+                )}
+              </Fragment>
+            ))}
+          </div>
+        </section>
+
+        <section className="capacity-panel">
+          <h3>Capacity View</h3>
+          <div className="capacity-grid">
+            {(output?.capacity ?? []).map((cell) => (
+              <div key={`${cell.teamId}-${cell.sprint}`} className="capacity-cell">
+                <div className="capacity-meta">
+                  <span>{teamsById.get(cell.teamId)?.name}</span>
+                  <span>S{cell.sprint}</span>
+                </div>
+                <div className="capacity-bar-shell">
+                  <div className={`capacity-fill ${cell.status}`} style={{ width: `${Math.min(100, cell.utilizationPct)}%` }} />
+                </div>
+                <small>
+                  {cell.used}/{cell.capacity} ({cell.utilizationPct}%)
+                </small>
+              </div>
+            ))}
+          </div>
+        </section>
+        <p className="message">{message}</p>
       </section>
+
+      <aside className="changelog-pane">
+        <h2>Changelog</h2>
+        {!output && <p className="placeholder">Run scheduler to see decisions.</p>}
+        <ul>
+          {(output?.changelog ?? []).map((entry) => (
+            <li key={entry.id} className={`log-entry ${entry.level.toLowerCase()}`}>
+              <strong>{entry.level}</strong>
+              <span>{entry.message}</span>
+            </li>
+          ))}
+        </ul>
+      </aside>
     </main>
   );
 }
