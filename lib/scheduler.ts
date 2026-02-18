@@ -10,7 +10,6 @@ function sortByPriority(initiatives: Initiative[]) {
   return [...initiatives].sort((a, b) => {
     const byPriority = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
     if (byPriority !== 0) return byPriority;
-    if (a.effort !== b.effort) return a.effort - b.effort;
     return a.name.localeCompare(b.name);
   });
 }
@@ -54,21 +53,41 @@ function topologicalSort(initiatives: Initiative[]) {
 }
 
 function getTeamCapacityBySprint(input: PlanInput) {
-  const capacityBySprint = new Map<string, number[]>();
+  const baseCapacity = new Map<string, number[]>();
+  const externalLoad = new Map<string, number[]>();
 
   for (const team of input.teams) {
-    capacityBySprint.set(team.id, Array.from({ length: input.settings.totalSprints }, () => 0));
+    baseCapacity.set(team.id, Array.from({ length: input.settings.totalSprints }, () => 0));
+    externalLoad.set(team.id, Array.from({ length: input.settings.totalSprints }, () => 0));
   }
 
   for (const engineer of input.engineers) {
-    const capacity = capacityBySprint.get(engineer.teamId);
+    const capacity = baseCapacity.get(engineer.teamId);
     if (!capacity) continue;
     for (let index = 0; index < input.settings.totalSprints; index += 1) {
       capacity[index] += engineer.sprintCapacity[index] ?? 0;
     }
   }
 
-  return capacityBySprint;
+  for (const load of input.externalLoads) {
+    const teamLoad = externalLoad.get(load.teamId);
+    if (!teamLoad) continue;
+    for (let index = 0; index < input.settings.totalSprints; index += 1) {
+      teamLoad[index] += load.sprintLoad[index] ?? 0;
+    }
+  }
+
+  const availableCapacity = new Map<string, number[]>();
+  input.teams.forEach((team) => {
+    const base = baseCapacity.get(team.id) ?? [];
+    const load = externalLoad.get(team.id) ?? [];
+    availableCapacity.set(
+      team.id,
+      Array.from({ length: input.settings.totalSprints }, (_, index) => Math.max(0, (base[index] ?? 0) - (load[index] ?? 0)))
+    );
+  });
+
+  return { baseCapacity, externalLoad, availableCapacity };
 }
 
 export function generateRoadmap(input: PlanInput): PlanOutput {
@@ -86,7 +105,7 @@ export function generateRoadmap(input: PlanInput): PlanOutput {
       continue;
     }
 
-    const teamSprints = teamCapacity.get(initiative.teamId);
+    const teamSprints = teamCapacity.availableCapacity.get(initiative.teamId);
     if (!teamSprints) {
       changelog.push(log("CONFLICT", `${initiative.name} references an unknown team.`));
       continue;
@@ -186,14 +205,25 @@ export function generateRoadmap(input: PlanInput): PlanOutput {
   }
 
   const capacity = input.teams.flatMap((team) => {
-    const sprints = teamCapacity.get(team.id) ?? [];
+    const availableSprints = teamCapacity.availableCapacity.get(team.id) ?? [];
+    const baseSprints = teamCapacity.baseCapacity.get(team.id) ?? [];
+    const loadSprints = teamCapacity.externalLoad.get(team.id) ?? [];
     return Array.from({ length: input.settings.totalSprints }, (_, index) => {
       const sprint = index + 1;
-      const cap = sprints[index] ?? 0;
+      const cap = availableSprints[index] ?? 0;
       const used = usedCapacity.get(`${team.id}-${sprint}`) ?? 0;
       const utilizationPct = cap === 0 ? 0 : Math.round((used / cap) * 100);
       const status: "healthy" | "high" | "over" = utilizationPct > 100 ? "over" : utilizationPct >= 86 ? "high" : "healthy";
-      return { teamId: team.id, sprint, used, capacity: cap, utilizationPct, status };
+      return {
+        teamId: team.id,
+        sprint,
+        used,
+        capacity: cap,
+        baseCapacity: baseSprints[index] ?? 0,
+        externalLoad: loadSprints[index] ?? 0,
+        utilizationPct,
+        status
+      };
     });
   });
 
