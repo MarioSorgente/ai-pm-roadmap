@@ -1,15 +1,22 @@
-# Capacity-aware Roadmap Builder (v0.3)
+# Capacity-aware Roadmap Builder (v0.4)
 
-Prototype for planning initiatives against real sprint capacity, dependencies, and target windows.
+Prototype for planning initiatives against sprint capacity, dependencies, and target windows.
 
 ## What changed
 
-- Added a clearer **capacity model**: `available capacity = engineer capacity - external load`.
-- Added team-level **external variables per sprint** (e.g., support, urgent requests) that consume capacity before scheduling.
-- Added a visual **Sprint map (capacity vs effort)** chart for each sprint.
-- Redesigned input layout with clearer labels and section guidance for teams, initiatives, and sprint logic.
-- Enabled **auto-persist to localStorage** on every input change, so refresh keeps your latest draft.
-- Capacity cells now show full context: `used / available`, plus base and external values.
+- Shifted planning model to **percentage-based capacity**:
+  - engineer capacity is entered as `%`
+  - initiative effort is entered as `% of one engineer sprint`
+  - external work consumes `%` before scheduling
+- Refreshed UI to a calmer, white, rounded visual style inspired by Airfocus.
+- Added team cards with:
+  - avatar + name rows
+  - slider-based capacity control with `Capacity / Available / Over` cues
+  - external load pills and inline `+ Add external`
+  - thin rounded capacity bars with calm over-capacity warning styles
+- Reduced visual density in initiatives: default shows 3 initiatives per page with simple pager controls.
+- Added more tooltip guidance so the interface stays minimal while still discoverable.
+- Kept local autosave and deterministic scheduling behavior.
 
 ## Run locally
 
@@ -20,19 +27,21 @@ npm run dev
 
 ## Quick test flow
 
-1. Edit engineer capacities and add external load rows (Support, Urgent requests, etc.).
-2. Create or edit initiatives with effort, team, dependencies, and optional target range.
-3. Click **Schedule**.
-4. Review:
-   - **Sprint map** (base capacity vs external load vs effort used)
+1. Edit engineer capacity sliders and external load percentages.
+2. Create or edit initiatives with effort %, team, dependencies, and optional target range.
+3. Use the initiatives pager (3 rows per page) when you have more than three initiatives.
+4. Click **Schedule**.
+5. Review:
+   - **Sprint map** (capacity %, external %, effort used %)
    - **Timeline by sprint**
    - **Per team / per sprint utilization** cards
    - **Changelog** reasoning and conflicts
-5. Refresh the page and verify your draft remains.
+6. Refresh the page and verify your draft remains.
 
 ## Tradeoffs / assumptions
 
 - Scheduling remains greedy and deterministic (fast, explainable, not globally optimal).
 - Initiative ownership is one team per initiative.
+- Team capacity can exceed 100% because it sums multiple engineers.
 - External variables reduce capacity per sprint but are not separately scheduled as initiatives.
 - No backend/database; draft state is local only.
