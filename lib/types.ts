@@ -15,6 +15,13 @@ export type Team = {
   engineerIds: string[];
 };
 
+export type ExternalLoad = {
+  id: string;
+  teamId: string;
+  name: string;
+  sprintLoad: number[];
+};
+
 export type TargetWindow = {
   startSprint: number;
   endSprint: number;
@@ -34,6 +41,7 @@ export type PlanInput = {
   teams: Team[];
   engineers: Engineer[];
   initiatives: Initiative[];
+  externalLoads: ExternalLoad[];
   settings: {
     totalSprints: number;
   };
@@ -69,6 +77,8 @@ export type CapacityCell = {
   sprint: number;
   used: number;
   capacity: number;
+  baseCapacity: number;
+  externalLoad: number;
   utilizationPct: number;
   status: "healthy" | "high" | "over";
 };
@@ -94,6 +104,10 @@ export const SAMPLE_PLAN: Omit<PlanInput, "settings"> = {
     { id: "eng-cara", name: "Cara Jones", initials: "C", teamId: "team-frontend", sprintCapacity: [5, 5, 5, 4, 5, 5, 5, 5, 5, 5] },
     { id: "eng-dan", name: "Dan Park", initials: "D", teamId: "team-backend", sprintCapacity: [10, 10, 9, 10, 10, 10, 10, 10, 10, 10] },
     { id: "eng-eve", name: "Eve Santos", initials: "E", teamId: "team-backend", sprintCapacity: [8, 8, 8, 8, 8, 7, 8, 8, 8, 8] }
+  ],
+  externalLoads: [
+    { id: "load-support-frontend", teamId: "team-frontend", name: "Support", sprintLoad: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2] },
+    { id: "load-urgent-backend", teamId: "team-backend", name: "Urgent requests", sprintLoad: [1, 1, 2, 1, 1, 1, 2, 1, 1, 1] }
   ],
   initiatives: [
     { id: "init-auth", name: "User Auth Flow", effort: 13, priority: "P0", dependencyIds: [], teamId: "team-backend" },

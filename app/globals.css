@@ -12,6 +12,8 @@
   --teal: #14b8a6;
   --amber: #f59e0b;
   --red: #ef4444;
+  --blue: #3b82f6;
+  --purple: #8b5cf6;
 }
 
 body {
@@ -45,7 +47,7 @@ p {
 .app-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 280px 1fr 300px;
+  grid-template-columns: 320px 1fr 320px;
 }
 
 .sidebar,
@@ -88,7 +90,7 @@ p {
   position: absolute;
   top: 22px;
   right: 0;
-  width: 220px;
+  width: 240px;
   white-space: normal;
   background: #0c1420;
   border: 1px solid var(--line);
@@ -110,7 +112,8 @@ p {
 .timeline-panel,
 .capacity-panel,
 .mapper-card,
-.top-bar {
+.top-bar,
+.capacity-map-panel {
   border: 1px solid var(--line);
   background: var(--panel);
 }
@@ -132,12 +135,24 @@ p {
   font-weight: 600;
 }
 
-.engineer-row {
+.formula-row,
+.load-label {
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+
+.engineer-row,
+.load-row {
   display: grid;
   grid-template-columns: 24px 1fr auto auto;
   gap: 6px;
   align-items: center;
   margin-bottom: 8px;
+}
+
+.load-row {
+  grid-template-columns: 100px 1fr 28px;
 }
 
 .initials {
@@ -186,6 +201,18 @@ p {
 .top-actions {
   display: flex;
   gap: 6px;
+  align-items: center;
+}
+
+.inline-label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.inline-label input {
+  width: 72px;
 }
 
 .primary {
@@ -193,7 +220,8 @@ p {
   color: var(--teal);
 }
 
-.mapper-card {
+.mapper-card,
+.capacity-map-panel {
   padding: 10px;
   display: grid;
   gap: 6px;
@@ -219,7 +247,7 @@ p {
 
 .initiative-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1.2fr) 58px 68px 120px 130px 54px 54px 28px;
+  grid-template-columns: minmax(180px, 1.2fr) 58px 68px 120px 130px 90px 90px 28px;
   gap: 6px;
   margin-bottom: 6px;
 }
@@ -231,7 +259,52 @@ p {
 }
 
 .initiative-row select[multiple] {
-  height: 32px;
+  height: 42px;
+}
+
+.sprint-map-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.sprint-map-card {
+  border: 1px solid var(--line);
+  background: var(--panel-muted);
+  padding: 8px;
+  display: grid;
+  gap: 5px;
+}
+
+.sprint-map-head {
+  font-weight: 600;
+}
+
+.metric-bar-shell {
+  height: 8px;
+  border: 1px solid var(--line);
+  background: #0b111b;
+}
+
+.metric-bar {
+  height: 100%;
+}
+
+.metric-bar.base {
+  background: var(--blue);
+}
+
+.metric-bar.load {
+  background: var(--purple);
+}
+
+.metric-bar.used {
+  background: var(--teal);
+}
+
+.metric-meta {
+  font-size: 11px;
+  color: var(--muted);
 }
 
 .timeline-grid {
@@ -383,7 +456,7 @@ p {
   }
 }
 
-@media (max-width: 1560px) {
+@media (max-width: 1700px) {
   .app-shell {
     grid-template-columns: 1fr;
   }
